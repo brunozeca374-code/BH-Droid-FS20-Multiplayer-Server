@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bh-droid-fs20-multiplayer-server
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: SERVER_NAME
+        value: BH Droid FS20 Multiplayer Server
+      - key: ROOM_ONLINE_TTL_MS
+        value: "100000"
