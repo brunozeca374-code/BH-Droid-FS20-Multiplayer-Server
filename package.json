@@ -1,0 +1,10 @@
+{
+  "name": "bh-droid-fs20-multiplayer-server",
+  "version": "19.0.0",
+  "private": true,
+  "description": "BH Droid FS20 Multiplayer Server V19 - save-delete sync + HTTP lobby + WSS relay on the same Render service",
+  "main": "server.js",
+  "scripts": {"start": "node server.js"},
+  "engines": {"node": ">=18"},
+  "dependencies": {"ws": "^8.18.0"}
+}
