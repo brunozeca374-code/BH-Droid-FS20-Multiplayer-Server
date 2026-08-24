@@ -7,7 +7,7 @@ const path = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = Number(process.env.PORT || 10000);
-const BRIDGE_VERSION = 'V22_RELAY_GUEST_CLEANUP_FS20_LOW_LATENCY';
+const BRIDGE_VERSION = 'V22_RELAY_GUEST_CLEANUP_FS20_LOW_LATENCY_ROOM_PRESENCE_FIX';
 const WS_PATH = '/relay';
 const wssRooms = new Map(); // FS20 roomId -> live WSS relay room on the same Render service
 let nextStreamId = 1;
@@ -132,6 +132,25 @@ function refreshRelayPlayers(roomId) {
   persistent.updatedAt = Date.now();
 }
 
+function touchRelayPresence(roomId) {
+  const id = String(roomId);
+  const live = wssRooms.get(id);
+  const persistent = rooms.get(Number(id));
+  if (!persistent || !live || !live.host || live.host.readyState !== WebSocket.OPEN) return false;
+
+  // An open relay is authoritative proof that the host is still in the live
+  // multiplayer session. Keep presence fresh from relay traffic/pings too so a
+  // delayed HTTP heartbeat cannot incorrectly age out an active game.
+  const now = Date.now();
+  persistent.online = true;
+  persistent.relayOnline = true;
+  persistent.players = 1 + live.guests.size;
+  persistent.lastSeen = now;
+  persistent.updatedAt = now;
+  persistent.offlineAt = null;
+  return true;
+}
+
 function removeRelayGuest(live, streamId, reason = 'guest disconnected', closeSocket = false) {
   if (!live) return false;
   streamId = Number(streamId || 0);
@@ -217,9 +236,11 @@ function handleRelayHostBinary(ws, data) {
   const guest = live.guests.get(frame.streamId);
   if (!guest) return;
   wsSafeSend(guest.ws, frame.buffer, { binary: true });
-  guest.lastActivityAt = Date.now();
+  const now = Date.now();
+  guest.lastActivityAt = now;
   live.bytesHostToGuests += frame.buffer.length - 6;
-  live.lastActivityAt = Date.now();
+  live.lastActivityAt = now;
+  touchRelayPresence(live.roomId);
 }
 
 function handleRelayGuestBinary(ws, data) {
@@ -229,10 +250,12 @@ function handleRelayGuestBinary(ws, data) {
   if (!live || !live.host || live.host.readyState !== WebSocket.OPEN) return;
   const guest = live.guests.get(frame.streamId);
   if (!guest || guest.ws !== ws) return;
-  guest.lastActivityAt = Date.now();
+  const now = Date.now();
+  guest.lastActivityAt = now;
   wsSafeSend(live.host, frame.buffer, { binary: true });
   live.bytesGuestsToHost += frame.buffer.length - 6;
-  live.lastActivityAt = Date.now();
+  live.lastActivityAt = now;
+  touchRelayPresence(live.roomId);
 }
 
 function handleRelayText(ws, text) {
@@ -756,6 +779,13 @@ function shutdown(signal) {
 process.once('SIGTERM', () => shutdown('SIGTERM'));
 process.once('SIGINT', () => shutdown('SIGINT'));
 
+// Apply low-latency TCP settings as soon as the socket is accepted, before the
+// WebSocket upgrade. The WSS connection handler repeats this defensively.
+server.on('connection', socket => {
+  try { if (socket && socket.setNoDelay) socket.setNoDelay(true); } catch (_) {}
+  try { if (socket && socket.setKeepAlive) socket.setKeepAlive(true, 10000); } catch (_) {}
+});
+
 const wss = new WebSocketServer({
   server,
   path: WS_PATH,
@@ -803,6 +833,7 @@ wss.on('connection', (ws) => {
 const wsHeartbeat = setInterval(() => {
   const now = Date.now();
   for (const live of wssRooms.values()) {
+    touchRelayPresence(live.roomId);
     for (const [streamId, guest] of Array.from(live.guests.entries())) {
       const lastActivityAt = Number(guest.lastActivityAt || guest.joinedAt || 0);
       if (lastActivityAt > 0 && now - lastActivityAt > RELAY_GUEST_IDLE_TTL_MS) {
