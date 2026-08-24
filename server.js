@@ -7,7 +7,7 @@ const path = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = Number(process.env.PORT || 10000);
-const BRIDGE_VERSION = 'V22_RELAY_GUEST_CLEANUP_FS20';
+const BRIDGE_VERSION = 'V22_RELAY_GUEST_CLEANUP_FS20_LOW_LATENCY';
 const WS_PATH = '/relay';
 const wssRooms = new Map(); // FS20 roomId -> live WSS relay room on the same Render service
 let nextStreamId = 1;
@@ -701,7 +701,7 @@ async function handleBridge(req, res, url) {
 
 loadRooms();
 
-const server = http.createServer((req, res) => {
+const server = http.createServer({ noDelay: true }, (req, res) => {
   let url;
   try {
     url = new URL(req.url, 'http://localhost');
@@ -764,6 +764,10 @@ const wss = new WebSocketServer({
 });
 
 wss.on('connection', (ws) => {
+  // Low-latency: disable Nagle and keep the relay TCP link warm.
+  // This keeps the SAME Render service/URL and only reduces avoidable buffering.
+  try { if (ws._socket && ws._socket.setNoDelay) ws._socket.setNoDelay(true); } catch (_) {}
+  try { if (ws._socket && ws._socket.setKeepAlive) ws._socket.setKeepAlive(true, 10000); } catch (_) {}
   ws.isAlive = true;
   ws.bhRole = null;
   ws.bhRoomId = null;
